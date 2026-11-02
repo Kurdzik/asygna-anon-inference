@@ -86,4 +86,4 @@ The tests inject a fake model, so they need no download.
 
 ## Licence
 
-The code is proprietary. The models have their own licence, CC BY 4.0, on their cards.
+The code is under the [Apache License 2.0](LICENSE). The models have their own licence, CC BY 4.0, on their cards.

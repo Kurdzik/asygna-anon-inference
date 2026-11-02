@@ -117,7 +117,7 @@ def test_a_1948_pesel_is_replaced_whichever_of_pesel_and_phone_is_requested() ->
     assert r["texts"] == texts and r["entities"] == []  # a kept phone stays one
 
 
-def test_the_wkm_rule_is_not_ported() -> None:
+def test_a_pesel_after_the_word_karta_stays_a_pesel() -> None:
     r = post(client(), ["karta pacjenta, PESEL 44051401359"], ["PESEL"]).json()
     assert r["texts"] == ["karta pacjenta, PESEL <PESEL_1>"]
 

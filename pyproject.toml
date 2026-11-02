@@ -1,7 +1,7 @@
 [project]
 name = "flisak-anon-inference"
 version = "0.1.0"
-license = "LicenseRef-Proprietary"
+license = "Apache-2.0"
 description = "The anonymisation API serving flisak-anon (Polish) and flisak-anon-en (English): regex rules, the name model and numbered placeholders."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"

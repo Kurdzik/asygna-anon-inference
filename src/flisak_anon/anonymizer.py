@@ -54,8 +54,6 @@ POLISH_BANK_ACCOUNT_REGEX = re.compile(
 IBAN_REGEX = re.compile(r"\b([A-Z]{2})(\d{2})([A-Z0-9]{11,30})\b", re.IGNORECASE)
 PESEL_REGEX = re.compile(r"\b\d{11}\b")
 ID_CARD_REGEX = re.compile(r"\b[A-Z]{3}\s?\d{6}\b", re.IGNORECASE)
-WKM_CONTEXT_REGEX = re.compile(r"\b(?:kart\w*|wkm|warszawiak\w*)\b", re.IGNORECASE)
-WKM_CONTEXT_WINDOW = 30
 PHONE_REGEX = re.compile(
     r"(?<![\d+])(?:(?:\+|00)?48[\s-]?)?"
     r"(?:\(\d{2}\)[\s-]?\d{3}[\s-]?\d{2}[\s-]?\d{2}"
@@ -290,7 +288,7 @@ def _entity_key(entity_type: str, raw: str) -> str:
     if entity_type == "BANK_ACCOUNT":
         value = raw.replace(" ", "").upper()
         return value[2:] if value.startswith("PL") else value
-    if entity_type in ("PESEL", "WKM", "CARD_NUMBER"):  # a PESEL is also an SSN or NI number in English
+    if entity_type in ("PESEL", "CARD_NUMBER"):  # a PESEL is also an SSN or NI number in English
         return re.sub(r"[\W_]", "", raw.upper())
     if entity_type == "ID_CARD":
         return raw.replace(" ", "").upper()
@@ -343,7 +341,7 @@ def _materialize(text: str, replacements: list[Record]) -> tuple[str, list[Recor
 
 
 def collect_regex_matches(text: str, api: bool = False) -> list[Record]:
-    """Regex-matched PII as {start, end, type, key} (no whitelists); `api=True` drops a city card rule and
+    """Regex-matched PII as {start, end, type, key} (no whitelists); `api=True`
     skips a PHONE or ID_CARD match starting inside an earlier one, which would win it: jan600100200@wp.pl.
     ENGLISH adds cards and English phones before the Polish phone rule, and SSN and NI numbers as PESEL after
     PESEL's, each only where no earlier match lies."""
@@ -383,9 +381,7 @@ def collect_regex_matches(text: str, api: bool = False) -> list[Record]:
     for m in PESEL_REGEX.finditer(text):
         if covered[m.start()]:
             continue
-        if not api and WKM_CONTEXT_REGEX.search(text[max(0, m.start() - WKM_CONTEXT_WINDOW) : m.start()]):
-            add(m, "WKM")
-        elif validate_pesel(m.group()):
+        if validate_pesel(m.group()):
             add(m, "PESEL")
     if ENGLISH:
         english(SSN_REGEX, "PESEL", validate_ssn)
