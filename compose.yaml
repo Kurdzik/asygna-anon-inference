@@ -1,0 +1,75 @@
+# The anonymisation API, one service per model; each model is downloaded once, into the volume. The API speaks plain
+# HTTP, so its ports stay on localhost: put a TLS proxy in front to reach it from another machine.
+x-image: &image
+  image: flisak-anon-inference
+  build: .
+
+x-model: &model
+  <<: *image
+  volumes:
+    - models:/models
+  command:
+    - sh
+    - -ec
+    - |
+      [ -f "/models/$$MODEL/manifest.json" ] && exit 0
+      rm -rf "/models/.tmp-$$MODEL" "/models/$$MODEL"
+      hf download "Kurdzik/$$MODEL" --local-dir "/models/.tmp-$$MODEL" --exclude .gitattributes
+      rm -rf "/models/.tmp-$$MODEL/.cache"
+      mv "/models/.tmp-$$MODEL" "/models/$$MODEL"
+
+x-service: &service
+  <<: *image
+  restart: unless-stopped
+  read_only: true
+  tmpfs:
+    - /tmp
+  volumes:
+    - models:/models:ro
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+    interval: 30s
+    timeout: 5s
+    retries: 3
+    start_period: 5m
+
+services:
+  english:
+    <<: *service
+    ports:
+      - "127.0.0.1:8001:8000"
+    environment:
+      ANON_API_KEY: ${ANON_API_KEY:?set ANON_API_KEY in .env}
+      ANON_MODEL_DIR: /models/flisak-anon-en
+      ANON_LANGUAGE: en
+    depends_on:
+      english-model:
+        condition: service_completed_successfully
+
+  english-model:
+    <<: *model
+    environment:
+      MODEL: flisak-anon-en
+
+  # Under a profile until the Polish model on the Hub has a manifest.json: the server refuses it without one.
+  polish:
+    <<: *service
+    profiles: [polish]
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      ANON_API_KEY: ${ANON_API_KEY:?set ANON_API_KEY in .env}
+      ANON_MODEL_DIR: /models/flisak-anon
+      ANON_LANGUAGE: pl
+    depends_on:
+      polish-model:
+        condition: service_completed_successfully
+
+  polish-model:
+    <<: *model
+    profiles: [polish]
+    environment:
+      MODEL: flisak-anon
+
+volumes:
+  models:

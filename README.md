@@ -25,26 +25,17 @@ rules.
 
 ## Run it
 
-Needs [uv](https://docs.astral.sh/uv/) and Python 3.12. This installs a CPU build of torch.
+With Docker. This builds a CPU image and downloads the English model once, into a volume:
 
 ```
-uv sync
-uv run hf download Kurdzik/flisak-anon-en --local-dir models/flisak-anon-en --exclude .gitattributes
-rm -rf models/flisak-anon-en/.cache
-
-export ANON_API_KEY=$(openssl rand -hex 24)
-ANON_MODEL_DIR=models/flisak-anon-en ANON_LANGUAGE=en uv run python -m flisak_anon.server
+echo "ANON_API_KEY=$(openssl rand -hex 24)" > .env
+docker compose up -d --build
 ```
 
-Remove `.cache` and leave out `.gitattributes` as above: the server checks the directory against the model's
-`manifest.json` and refuses to start on any file the manifest does not list.
-
-The Polish model's current version on the Hub (0.1.0) has no `manifest.json` yet, so the server refuses it as downloaded.
-
-The server listens on port 8000. In another shell, with the same `ANON_API_KEY`:
+The API is on `localhost:8001` once `docker compose ps` shows it healthy. Try it with the key from `.env`:
 
 ```
-curl -s localhost:8000/v1/anonymize -H "Authorization: Bearer $ANON_API_KEY" -H "Content-Type: application/json" -d '{
+curl -s localhost:8001/v1/anonymize -H "Authorization: Bearer $(cut -d= -f2 .env)" -H "Content-Type: application/json" -d '{
   "model": "flisak-anon-en-0.1.0",
   "texts": ["John Smith called Mary Jones on 020 7946 0958. Later John Smith wrote back."],
   "features": ["PERSON", "PHONE"]
@@ -52,6 +43,21 @@ curl -s localhost:8000/v1/anonymize -H "Authorization: Bearer $ANON_API_KEY" -H 
 ```
 
 `GET /v1/models` gives the model id to send. [API.md](API.md) has the whole contract: features, `keep`, errors, limits.
+
+The Polish model is the `polish` service on `localhost:8000`, under `docker compose --profile polish up -d`. Its current
+version on the Hub (0.1.0) has no `manifest.json` yet, so the server refuses it as downloaded.
+
+Without Docker, with [uv](https://docs.astral.sh/uv/) and Python 3.12:
+
+```
+uv sync
+uv run hf download Kurdzik/flisak-anon-en --local-dir models/flisak-anon-en --exclude .gitattributes
+rm -rf models/flisak-anon-en/.cache
+ANON_API_KEY=$(openssl rand -hex 24) ANON_MODEL_DIR=models/flisak-anon-en ANON_LANGUAGE=en uv run python -m flisak_anon.server
+```
+
+Remove `.cache` and leave out `.gitattributes` as above: the server checks the directory against the model's
+`manifest.json` and refuses to start on any file the manifest does not list.
 
 For a GPU, run the same module in an image with torch and CUDA, with `src/` on `PYTHONPATH` and the model directory
 mounted read-only.
