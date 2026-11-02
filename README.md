@@ -28,14 +28,14 @@ rules.
 With Docker. This builds a CPU image and downloads the English model once, into a volume:
 
 ```
-echo "ANON_API_KEY=$(openssl rand -hex 24)" > .env
+cp .env.example .env    # then set ANON_API_KEY in it
 docker compose up -d --build
 ```
 
 The API is on `localhost:8001` once `docker compose ps` shows it healthy. Try it with the key from `.env`:
 
 ```
-curl -s localhost:8001/v1/anonymize -H "Authorization: Bearer $(cut -d= -f2 .env)" -H "Content-Type: application/json" -d '{
+curl -s localhost:8001/v1/anonymize -H "Authorization: Bearer $(grep ^ANON_API_KEY= .env | cut -d= -f2)" -H "Content-Type: application/json" -d '{
   "model": "flisak-anon-en-0.1.0",
   "texts": ["John Smith called Mary Jones on 020 7946 0958. Later John Smith wrote back."],
   "features": ["PERSON", "PHONE"]
