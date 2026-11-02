@@ -1,0 +1,51 @@
+[project]
+name = "flisak-anon-inference"
+version = "0.1.0"
+license = "LicenseRef-Proprietary"
+description = "The anonymisation API serving flisak-anon (Polish) and flisak-anon-en (English): regex rules, the name model and numbered placeholders."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "torch==2.11.0",             # BSD-3-Clause
+    "transformers==5.12.0",      # Apache-2.0
+    "sacremoses>=0.1.1",         # MIT (HerBERT's tokenizer, the Polish model)
+    "huggingface-hub>=1.0",      # Apache-2.0 (the `hf download` of a model)
+    "fastapi==0.136.3",          # MIT
+    "starlette==1.6.0",          # BSD-3-Clause
+    "pydantic==2.13.5",          # MIT
+    "uvicorn==0.52.4",           # BSD-3-Clause
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.13",    # MIT
+    "pytest>=8.4",   # MIT
+    "httpx>=0.28",   # BSD-3-Clause (FastAPI's TestClient)
+]
+
+# torch's Linux wheels on PyPI pull NVIDIA's proprietary CUDA wheels: Linux resolves the CPU-only build.
+# For a GPU, run the service in an image that has torch with CUDA (see README.md).
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/flisak_anon"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
