@@ -51,10 +51,8 @@ services:
     environment:
       MODEL: flisak-anon-en
 
-  # Under a profile until the Polish model on the Hub has a manifest.json: the server refuses it without one.
   polish:
     <<: *service
-    profiles: [polish]
     ports:
       - "127.0.0.1:8000:8000"
     environment:
@@ -67,7 +65,6 @@ services:
 
   polish-model:
     <<: *model
-    profiles: [polish]
     environment:
       MODEL: flisak-anon
 

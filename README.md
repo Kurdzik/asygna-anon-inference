@@ -25,14 +25,15 @@ rules.
 
 ## Run it
 
-With Docker. This builds a CPU image and downloads the English model once, into a volume:
+With Docker. This builds a CPU image and downloads both models once, into a volume (about 1 GB each):
 
 ```
 cp .env.example .env    # then set ANON_API_KEY in it
 docker compose up -d --build
 ```
 
-The API is on `localhost:8001` once `docker compose ps` shows it healthy. Try it with the key from `.env`:
+The Polish model is on `localhost:8000` and the English one on `localhost:8001` once `docker compose ps` shows them
+healthy. Try the English one with the key from `.env`:
 
 ```
 curl -s localhost:8001/v1/anonymize -H "Authorization: Bearer $(grep ^ANON_API_KEY= .env | cut -d= -f2)" -H "Content-Type: application/json" -d '{
@@ -43,9 +44,6 @@ curl -s localhost:8001/v1/anonymize -H "Authorization: Bearer $(grep ^ANON_API_K
 ```
 
 `GET /v1/models` gives the model id to send. [API.md](API.md) has the whole contract: features, `keep`, errors, limits.
-
-The Polish model is the `polish` service on `localhost:8000`, under `docker compose --profile polish up -d`. Its current
-version on the Hub (0.1.0) has no `manifest.json` yet, so the server refuses it as downloaded.
 
 Without Docker, with [uv](https://docs.astral.sh/uv/) and Python 3.12:
 
