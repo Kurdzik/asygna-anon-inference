@@ -9,8 +9,8 @@ can go on to an AI model or a reader who should not see the data.
 
 It has two stages, and only the second is the model you download:
 
-1. **Regex rules** in this code find e-mail addresses, IP addresses, bank accounts, phone numbers, ID numbers and,
-   in English, payment cards. Numbers with a checksum are validated.
+1. **Regex rules** in this code find e-mail addresses, IP addresses, bank accounts, phone numbers, ID numbers and
+   payment cards. Numbers with a checksum are validated.
 2. **A name model** finds people's names in the text the rules left.
 
 The numbering is also in this code, so a model on its own gives you neither the rules nor the placeholders.
@@ -20,8 +20,7 @@ The numbering is also in this code, so a model on its own gives you neither the 
 | [Kurdzik/flisak-anon](https://huggingface.co/Kurdzik/flisak-anon) | Polish | `pl` (default) |
 | [Kurdzik/flisak-anon-en](https://huggingface.co/Kurdzik/flisak-anon-en) | English | `en` |
 
-Run one process per model. `ANON_LANGUAGE=en` adds English phone, SSN, National Insurance and card rules to the Polish
-rules.
+Run one process per model. `ANON_LANGUAGE=en` adds English phone, SSN and National Insurance rules to the Polish rules.
 
 ## Run it
 
@@ -62,16 +61,23 @@ mounted read-only.
 
 ## What the numbers mean
 
-Numbering runs per request, across all its texts. The same written form gets the same number, so a reader can tell
-two people apart and a caller can restore an answer from its own map:
+Numbering runs per request, across all its texts. The same value gets the same number, so a reader can tell two people
+apart and a caller can restore an answer from its own map.
+
+On the Polish instance one person keeps one number through their case forms, by a rule that strips the endings, and a
+surname alone takes the number of the one full name of the request ending in it:
 
 ```
-John Smith called Mary Jones. Later John Smith wrote to Mary. Mr Smith will call back.
-<PERSON_1> called <PERSON_2>. Later <PERSON_1> wrote to <PERSON_3>. Mr <PERSON_4> will call back.
+Jan Kowalski napisał do Anny Nowak. Odpowiedź dla Jana Kowalskiego: Kowalski oddzwoni. Pisze Jan.
+<PERSON_1> napisał do <PERSON_2>. Odpowiedź dla <PERSON_1>: <PERSON_1> oddzwoni. Pisze <PERSON_3>.
 ```
 
-It counts written forms, not people: "Mary Jones" and "Mary" get two numbers, as do "Jan Kowalski" and "Jana Kowalskiego".
-Nothing leaks through this, but a reader may see one person as several. Numbers restart with each request.
+A first name alone keeps its own number, as it is too often another person's, and two people the rule cannot tell apart
+(Jan and Jana share a stem) share a number. Nothing leaks through this, but a reader may see one person as several, or
+two as one.
+
+The English instance counts written forms, not people: "Mary Jones", "Mary" and "Smith" each get a number of their own.
+Numbers restart with each request.
 
 ## Limits
 

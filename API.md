@@ -3,8 +3,10 @@
 The HTTP contract and the rules of the service in `src/flisak_anon/`. It runs on premises, stateless, one model a
 process, and it is meant to be called by servers. A caller names what it wants masked in each request.
 
-Contract version 1.1: `ANON_LANGUAGE=en` adds the English rules of api.3 to the regex stage and offers `CARD_NUMBER`;
-with the default `pl` the service offers the seven other features.
+Contract version 1.2 (code 0.1.1, models unchanged): every instance offers all eight features of api.3, and a Polish
+instance gives one person's forms one label (A5). `ANON_LANGUAGE=en` adds the English rules of api.3 to the regex stage.
+The answer's shape is the same as in version 1.1. A `pl` server of version 1.1 answers a request naming `CARD_NUMBER`
+422 `unsupported_feature` with `param` `CARD_NUMBER`, and every other request as before.
 
 ## api.1 Rules
 
@@ -13,7 +15,7 @@ with the default `pl` the service offers the seven other features.
 | A2 | **The caller names the features per request** from a closed list (api.3). The service finds every feature it knows, but replaces only the requested ones. Anything not requested stays readable as written, including a name inside an e-mail address when EMAIL is not requested. | Each install decides what leaves readable. |
 | A3 | **Model + regex, in a fixed order.** The regex stage runs first. Every regex match becomes a placeholder in the text the model reads, whether requested or not, and then the model runs. | The models were trained on text that had been through the regex stage, so they must read the same kind of text. |
 | A4 | **The model runs only when a model feature is requested** (PERSON, or PHONE, which the Polish model also tags). A request for regex features only never runs the model. | Cost: regexes take microseconds. |
-| A5 | **Placeholders are `<TYPE_n>`, numbered per request across all its texts**, in reading order (text, then offset). The same value gets the same number. A name is compared by its casefolded form, so "Jan Kowalski", "Jana Kowalskiego" and "Kowalski" get three numbers; a phone number is compared by its digits. Only replaced entities take a number, so the numbers have no gaps. | A reader can tell one person from two across a sender line and a signature. Numbers are deterministic. |
+| A5 | **Placeholders are `<TYPE_n>`, numbered per request across all its texts**, in reading order (text, then offset). The same value gets the same number. On a Polish instance a name goes by a key per name part with the Polish case endings stripped by a rule (`persons.py`), so "Jan Kowalski" and "Jana Kowalskiego" share one, a surname alone shares the label of the one full name of the request ending in it, and stays its own with two such names, and a first name alone stays its own; merged spans each keep their own `[start, end)`. An English instance numbers a name by its casefolded form. A phone number is compared by its digits. Only replaced entities take a number, so the numbers have no gaps. | A reader can tell one person from two across a sender line and a signature. Numbers are deterministic. |
 | A6 | **The answer gives spans as well as texts**: each replaced entity's text index, `[start, end)` in Unicode code points of the text as sent, type, label and source (`regex` or `model`). It never repeats the value it found. | The caller can check the answer, and an evaluation can score it without parsing placeholders. |
 | A7 | **OpenAI-compatible conventions**: base URL ending in `/v1`, `Authorization: Bearer`, `GET /v1/models`, and errors in OpenAI's `{"error": {...}}` shape. | Existing OpenAI clients and model lists work as they are. |
 | A8 | **The service stores and logs no text.** Logs hold a request id, character and entity counts per type, latency and status, and never text, values or keys. An error never echoes input. Nothing is cached. | The input is exactly the personal data being protected. |
@@ -99,7 +101,7 @@ The message is a fixed sentence per code and never quotes the input.
 | `BANK_ACCOUNT` | Numery rachunków bankowych / Bank account numbers | regex, checksum | NRB (26 digits, `PL` optional) and IBAN (mod 97, the country's length) |
 | `ID_CARD` | Numery dowodów osobistych / ID card numbers | regex, checksum | three letters and six digits with a valid check digit |
 | `IP_ADDRESS` | Adresy IP / IP addresses | regex | IPv4 and full IPv6 |
-| `CARD_NUMBER` | Numery kart płatniczych / Payment card numbers | regex, Luhn; only with `ANON_LANGUAGE=en` (422 `unsupported_feature` otherwise) | 13 to 19 digits in fours (4-4-4-4, 4-4-4-4-3) or as 4-6-5 and 4-6-4, spaces or dashes, one separator throughout; never glued to a number, `+` or `/`, nor inside a longer run of groups (an IBAN's) |
+| `CARD_NUMBER` | Numery kart płatniczych / Payment card numbers | regex, Luhn | 13 to 19 digits in fours (4-4-4-4, 4-4-4-4-3) or as 4-6-5 and 4-6-4, any whitespace between groups (a wrapped line, a no-break space) or dashes throughout, an expiry or a code right after sixteen digits left as written; never glued to a number, `+` or `/`, nor inside a longer run of groups (an IBAN's). It is a code of its own: a card number is no bank account. A number written in fours that is no card passes Luhn one time in ten and goes masked |
 
 **English rules** (`ANON_LANGUAGE=en` on the server, `pl` by default; any other value refuses to start). They run
 beside the Polish ones, which stay as they are, and each takes a number only where no earlier match lies:
@@ -115,7 +117,6 @@ beside the Polish ones, which stay as they are, and each takes a number only whe
 - `PESEL` also takes the US Social Security number (3-2-4 with dashes or spaces, never area 000, 666 or 9xx, group
   00 or serial 0000) and the UK National Insurance number (AB 12 34 56 C, HMRC's prefix rules, suffix A-D): both
   are a person's national number, the place PESEL holds in Polish mail.
-- `CARD_NUMBER` above. It is a code of its own: a card number is no bank account.
 What they leave: amounts, dates, times, sort codes, postcodes, a ten-digit number in one piece (a US number written
 so, or an invoice or order number), a card written in one piece (as often a reference or a barcode), a number glued to a
 dash or slash (INV-0123456789). What they take too, failing closed: a `+` before an amount in groups (+12 345 678),
@@ -128,7 +129,6 @@ Not offered yet. Each needs a model or regex change and is measured before it is
   postal-code regex.
 - `PASSPORT` (check digit).
 - `NIP` (checksum). A sole trader's NIP identifies a person, a company's does not.
-- `CARD_NUMBER` for Polish mail (built for English, Luhn; measured on Polish text before it runs there).
 - `PLATE` (vehicle registration).
 - `BIRTH_DATE`.
 
@@ -165,17 +165,19 @@ Not offered yet. Each needs a model or regex change and is measured before it is
    still overlap, the rightmost one wins (`_rightmost`). The regex match keeps its own
    characters: replaced if requested and not kept, readable otherwise. A snapped span never swallows a placeholder: "Jan Kowalski 600 100 200" is `<PERSON_1> <PHONE_1>`, or `<PERSON_1> 600 100 200`
    when PHONE is not requested.
-5. Number and apply only the requested matches that are not kept (A5). Return the texts and the spans.
+5. Number and apply only the requested matches that are not kept (A5), a person's merged forms first read from all the
+   request's names, so a lone surname ahead of its full name takes the same label. Return the texts and the spans.
 
 **Layout.** `server.py`: routes, limits, errors, auth, the manifest check (`verify`), the load and warm-up (`load`), and
-step 4's trim and overlap rule and step 5 (`anonymize`). `anonymizer.py`: steps 1-3 and step 4's snap and mapping. `create_app`
+step 4's trim and overlap rule and step 5 (`anonymize`). `anonymizer.py`: steps 1-3 and step 4's snap and mapping. `persons.py`: step 5's one label per person. `create_app`
 takes the NER function, so `tests/test_server.py` injects a fake one.
 
 **Runtime.** CUDA when the container sees a GPU, else CPU. On CPU flisak-anon reads about 1,000 characters in 168
 ms of wall time on 6 threads , so a 5,000-character complaint takes under a second and the
 200,000-character limit about 34 s. Text of one token per character costs three times that: 200,000 dots or emoji
 are 449 windows and took about 100 s in the image on 6 CPUs (2026-10-14). One model run at a time; up to 8 more
-requests wait for it, and a further one is answered 429 `busy`. A request for regex features only never waits for the
+requests wait for it, and a further one is answered 429 `busy`. A waiting request whose client has left is dropped at
+its turn, while a run under way goes to its end. A request for regex features only never waits for the
 model and takes no place in its queue.
 The regexes run in linear time: the e-mail pattern takes at most 64 characters before the `@` and 63 per domain
 label, as the validator and DNS allow (also in `mask`). An unbounded pattern is quadratic: 200,000

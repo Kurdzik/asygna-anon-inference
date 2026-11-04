@@ -6,8 +6,8 @@ scoring over 0.4 are snapped around placeholders and applied with the rightmost 
 `stages` also maps every applied span back to the original text; server.py calls it with `api=True` (API.md
 api.4). The 64-token overlap is `windowed`'s, not the pipeline's (tokenizers 0.23 returns only the first
 overflow window), and EMAIL_REGEX bounds the local part to 64 characters and each domain label to 63, since
-an unbounded pattern is quadratic on "a.a.a...". ENGLISH adds English phones, the US SSN, the UK NI number
-and card numbers (API.md api.3).
+an unbounded pattern is quadratic on "a.a.a...". `api=True` adds card numbers; ENGLISH adds them too, with
+English phones, the US SSN and the UK NI number (API.md api.3).
 """
 
 from __future__ import annotations
@@ -61,8 +61,8 @@ PHONE_REGEX = re.compile(
     r"|\d{2}[\s-]?\d{3}[\s-]?\d{2}[\s-]?\d{2})"
     r"(?!\d)"
 )
-# ANON_LANGUAGE=en adds the English rules below to the Polish ones (API.md api.3); pl, the default, runs the
-# Polish ones alone, as the service does
+# ANON_LANGUAGE=en adds the phone and id rules below to the Polish ones (API.md api.3); pl, the default, runs
+# the Polish ones alone, as the service does. Cards, further down, run on every instance
 ENGLISH = os.environ.get("ANON_LANGUAGE", "pl") == "en"
 ENGLISH_PHONE_REGEX = re.compile(
     r"(?<![\w+/-])(?:"
@@ -78,12 +78,20 @@ ENGLISH_PHONE_REGEX = re.compile(
 )
 SSN_REGEX = re.compile(r"(?<![\d/-])(\d{3})([ -])(\d{2})\2(\d{4})(?![\d-])")
 NI_NUMBER_REGEX = re.compile(r"\b[A-Z]{2} ?\d{2} ?\d{2} ?\d{2} ?[A-D]\b", re.IGNORECASE)
+# A card's groups: any run of whitespace parts them, as a mail wraps its lines and a PDF prints no-break
+# spaces; dashes all or none, so 5555-5555-5555 4444 is no card. Never glued to a number, + or slash, nor
+# inside a longer run of groups on its line (an IBAN's), while a number ending the line above stops nothing
+CARD_START = r"(?<![\d+/-])(?<!\d[^\S\n])"
 CARD_REGEX = re.compile(  # in groups: one piece of 13 to 19 digits is as often a reference or a barcode
-    r"(?<![\d+/-])(?<!\d[ -])(?:"  # never glued to a number, + or slash, nor inside a longer run (an IBAN's)
-    r"\d{4}([ -])\d{4}\1\d{4}\1\d{1,4}(?:\1\d{1,3})?"  # 4111 1111 1111 1111, 4-4-4-4-3
-    r"|\d{4}([ -])\d{6}\2\d{4,5})"  # 3782 822463 10005 (American Express, Diners)
+    CARD_START + r"(?:"
+    r"\d{4}(?:\s+\d{4}){2}\s+\d{1,4}(?:\s+\d{1,3})?"  # 4111 1111 1111 1111, 4-4-4-4-3
+    r"|\d{4}(?:-\d{4}){2}-\d{1,4}(?:-\d{1,3})?"
+    r"|\d{4}\s+\d{6}\s+\d{4,5}"  # 3782 822463 10005 (American Express, Diners)
+    r"|\d{4}-\d{6}-\d{4,5})"
     r"(?![\d-])"
 )
+# The sixteen digits alone, for what follows them and is no part of the number: 4111 1111 1111 1111 12/26
+CARD_SIXTEEN_REGEX = re.compile(CARD_START + r"\d{4}(?:(?:\s+\d{4}){3}|(?:-\d{4}){3})(?![\d-])")
 IBAN_LENGTHS = {
     "AD": 24, "AE": 23, "AL": 28, "AT": 20, "AZ": 28, "BA": 20, "BE": 16, "BG": 22, "BH": 22, "BR": 29,
     "BY": 28, "CH": 21, "CR": 22, "CY": 28, "CZ": 24, "DE": 22, "DK": 18, "DO": 28, "EE": 20, "EG": 29,
@@ -341,10 +349,10 @@ def _materialize(text: str, replacements: list[Record]) -> tuple[str, list[Recor
 
 
 def collect_regex_matches(text: str, api: bool = False) -> list[Record]:
-    """Regex-matched PII as {start, end, type, key} (no whitelists); `api=True`
-    skips a PHONE or ID_CARD match starting inside an earlier one, which would win it: jan600100200@wp.pl.
-    ENGLISH adds cards and English phones before the Polish phone rule, and SSN and NI numbers as PESEL after
-    PESEL's, each only where no earlier match lies."""
+    """Regex-matched PII as {start, end, type, key} (no whitelists); `api=True` adds payment cards before
+    the phone rule, where no earlier match lies, and skips a PHONE or ID_CARD match starting inside an earlier
+    one, which would win it: jan600100200@wp.pl. ENGLISH adds cards too and English phones before the Polish
+    phone rule, and SSN and NI numbers as PESEL after PESEL's, each only where no earlier match lies."""
     if not text or len(text.strip()) < 3:
         return []
     records: list[Record] = []
@@ -356,10 +364,14 @@ def collect_regex_matches(text: str, api: bool = False) -> list[Record]:
         )
         covered[m.start() : m.end()] = b"\1" * (m.end() - m.start())
 
-    def english(regex: re.Pattern[str], kind: str, valid: Callable[[str], bool]) -> None:
-        for m in regex.finditer(text):
+    def where_free(regex: re.Pattern[str], kind: str, valid: Callable[[str], bool]) -> None:
+        """A refused match gives its text back: a number ending the line above can read as a card's start."""
+        position = 0
+        while m := regex.search(text, position):
+            position = m.start() + 1
             if not any(covered[m.start() : m.end()]) and valid(m.group()):
                 add(m, kind)
+                position = m.end()
 
     for m in EMAIL_REGEX.finditer(text):
         if validate_email(m.group()):
@@ -372,9 +384,11 @@ def collect_regex_matches(text: str, api: bool = False) -> list[Record]:
     for m in IBAN_REGEX.finditer(text):
         if not covered[m.start()] and validate_iban(m.group()):
             add(m, "BANK_ACCOUNT")
+    if api or ENGLISH:
+        where_free(CARD_REGEX, "CARD_NUMBER", validate_card)
+        where_free(CARD_SIXTEEN_REGEX, "CARD_NUMBER", validate_card)
     if ENGLISH:
-        english(CARD_REGEX, "CARD_NUMBER", validate_card)
-        english(ENGLISH_PHONE_REGEX, "PHONE", validate_english_phone)
+        where_free(ENGLISH_PHONE_REGEX, "PHONE", validate_english_phone)
     for m in PHONE_REGEX.finditer(text):
         if not ((api or ENGLISH) and covered[m.start()]):
             add(m, "PHONE")
@@ -384,8 +398,8 @@ def collect_regex_matches(text: str, api: bool = False) -> list[Record]:
         if validate_pesel(m.group()):
             add(m, "PESEL")
     if ENGLISH:
-        english(SSN_REGEX, "PESEL", validate_ssn)
-        english(NI_NUMBER_REGEX, "PESEL", validate_ni_number)
+        where_free(SSN_REGEX, "PESEL", validate_ssn)
+        where_free(NI_NUMBER_REGEX, "PESEL", validate_ni_number)
     for m in ID_CARD_REGEX.finditer(text):
         if not (api and covered[m.start()]) and validate_id_card(m.group()):
             add(m, "ID_CARD")

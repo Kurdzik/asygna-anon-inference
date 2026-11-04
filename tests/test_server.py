@@ -1,14 +1,18 @@
 import hashlib
+import http.client
 import json
 import logging
 import re
+import socket
+import threading
 import time
 from pathlib import Path
 
 import pytest
+import uvicorn
 from fastapi.testclient import TestClient
 
-from flisak_anon import anonymizer, server
+from flisak_anon import anonymizer, persons, server
 from flisak_anon.anonymizer import REQUIRED_MODEL_FILES
 
 KEY = "k" * 32
@@ -338,6 +342,63 @@ def test_the_model_directory_must_match_its_manifest(tmp_path: Path) -> None:
         server.verify(d)
 
 
+def test_the_start_refuses_a_short_key_and_a_damaged_model(tmp_path: Path, monkeypatch) -> None:
+    d = manifest_dir(tmp_path)
+    monkeypatch.setenv("ANON_MODEL_DIR", str(d))
+    monkeypatch.setenv("ANON_API_KEY", "short")
+    with pytest.raises(SystemExit, match="at least 16 characters"):
+        server.main()
+    monkeypatch.setenv("ANON_API_KEY", KEY)
+    (d / "config.json").write_text("changed")
+    with pytest.raises(SystemExit, match="refusing to start: config.json does not match"):
+        server.main()
+
+
+def test_a_request_whose_client_left_while_it_waited_never_reaches_the_model(caplog) -> None:
+    """Through a real uvicorn, as its view of a closed connection is what the route reads."""
+    reading, release, calls = threading.Event(), threading.Event(), []
+
+    def slow_ner(texts: list[str], **kwargs) -> list[list[dict]]:
+        calls.append(texts)
+        reading.set()
+        release.wait(30)
+        return [[] for _ in texts]
+
+    def send(text: str) -> http.client.HTTPConnection:
+        body = json.dumps({"model": MODEL, "texts": [text], "features": ["PERSON"]})
+        connection = http.client.HTTPConnection("127.0.0.1", listening.getsockname()[1], timeout=30)
+        connection.request("POST", "/v1/anonymize", body, {**AUTH, "Content-Type": "application/json"})
+        return connection
+
+    listening = socket.create_server(("127.0.0.1", 0))
+    app = server.create_app(MODEL, slow_ner, KEY)
+    uvicorn_server = uvicorn.Server(uvicorn.Config(app, log_level="error"))
+    running = threading.Thread(target=uvicorn_server.run, kwargs={"sockets": [listening]})
+    running.start()
+    try:
+        with caplog.at_level(logging.INFO, logger="flisak_anon.server"):
+            while not uvicorn_server.started:
+                time.sleep(0.01)
+            first = send("Pierwszy tekst")
+            assert reading.wait(10)
+            waiting = send("Drugi tekst")
+            time.sleep(0.5)  # it has reached the model's lock
+            waiting.close()
+            time.sleep(0.5)  # the server has seen the connection go
+            release.set()
+            assert first.getresponse().status == 200
+            deadline = time.monotonic() + 10
+            while "code=client_left" not in caplog.text and time.monotonic() < deadline:
+                time.sleep(0.01)
+        assert "code=client_left" in caplog.text
+        assert calls == [["Pierwszy tekst"]]
+    finally:
+        release.set()
+        uvicorn_server.should_exit = True
+        running.join(10)
+        listening.close()
+
+
 def word_tokenizer():
     """A real fast tokenizer, one token per word or punctuation mark as HerBERT's normalizer and pre-tokenizer
     split them, 512 tokens with <s> and </s>, built in memory."""
@@ -469,12 +530,6 @@ ENGLISH_TAKES = [
     ("PESEL", "AB 12 34 56 C", "AB 12 34 56 E"),  # the UK NI number; its suffix is A-D
     ("PESEL", "AB123456C", "QQ123456C"),
     ("PESEL", "ab123456d", "GB123456A"),
-    ("CARD_NUMBER", "4111 1111 1111 1111", "4111 1111 1111 1112"),  # Luhn
-    ("CARD_NUMBER", "5555-5555-5555-4444", "5555-5555-5555 4444"),  # one separator throughout
-    ("CARD_NUMBER", "4222 2222 2222 2", "4111 1111 1111"),  # 13 and 12 digits
-    ("CARD_NUMBER", "3782 822463 10005", "3782 822463 10006"),
-    ("CARD_NUMBER", "4111-1111-1111-1111", "ZAM/4111-1111-1111-1111"),
-    ("CARD_NUMBER", "4111 1111 1111 1111 110", "4111 1111 1111 1111 111"),
 ]
 ENGLISH_LEAVES = [
     "Invoice INV-0123456789", "ref 0123456789", "PO 4500012345", "2125550198", "2024-11-01", "01/11/2024",
@@ -485,13 +540,218 @@ ENGLISH_LEAVES = [
 ]  # fmt: skip
 
 
+CARD_TAKES = [
+    ("4111 1111 1111 1111", "4111 1111 1111 1112"),  # Luhn
+    ("5555-5555-5555-4444", "5555-5555-5555 4444"),  # one separator throughout
+    ("4222 2222 2222 2", "4111 1111 1111"),  # 13 and 12 digits
+    ("3782 822463 10005", "3782 822463 10006"),  # 15, American Express
+    ("3056 930902 5904", "3056 930902 5905"),  # 14, Diners
+    ("4111-1111-1111-1111", "ZAM/4111-1111-1111-1111"),
+    ("6759 6498 2643 8454 001", "6759 6498 2643 8454 002"),  # 19, Maestro
+]
+CARD_LEAVES = {
+    "an account number": "61 1090 1014 0000 0712 1981 2874",
+    "an account number with PL": "PL61 1090 1014 0000 0712 1981 2874",
+    "an account number with a wrong check": "62 1090 1014 0000 0712 1981 2874",
+    "a NIP": "1234563218",
+    "a NIP with dashes": "123-456-32-18",
+    "a PESEL": "44051401359",
+    "an invoice number": "FV/2026/03/00012",
+    "a number in groups of an invoice, failing Luhn": "2026-0001-0002-0004",
+    "an IBAN in one piece": "DE89370400440532013000",
+    "an IBAN in fours": "DE89 3704 0044 0532 0130 00",
+    "a phone": "+48 600 100 200",
+    "a card written in one piece": "4111111111111111",
+    "a date and a time": "2026-11-04 10:30",
+    "an amount": "1 234 567,89",
+}
+
+
+@pytest.mark.parametrize(("valid", "invalid"), CARD_TAKES)
+def test_a_card_number_on_the_polish_instance(valid: str, invalid: str) -> None:
+    r = post(client(), [f"Karta {valid}, dziękuję", f"Karta {invalid}, dziękuję"], ["CARD_NUMBER"]).json()
+    assert r["texts"] == ["Karta <CARD_NUMBER_1>, dziękuję", f"Karta {invalid}, dziękuję"]
+    assert [(e["start"], e["end"], e["source"]) for e in r["entities"]] == [(6, 6 + len(valid), "regex")]
+
+
+@pytest.mark.parametrize("value", CARD_LEAVES.values(), ids=CARD_LEAVES)
+def test_what_a_card_number_must_leave(value: str) -> None:
+    assert post(client(), [f"Numer {value} koniec"], ["CARD_NUMBER"]).json()["texts"] == [
+        f"Numer {value} koniec"
+    ]
+
+
+@pytest.mark.parametrize(
+    "card",
+    [
+        "4111\xa01111\xa01111\xa01111",  # a PDF's no-break spaces
+        "4111\t1111\t1111\t1111",
+        "4111  1111  1111  1111",
+        "4111\n1111 1111 1111",  # a wrapped line, at each place it can break
+        "4111 1111\n1111 1111",
+        "4111 1111 1111\n1111",
+        "4111 1111\r\n1111 1111",
+        "4111 1111\n    1111 1111",
+        "3782\n822463 10005",
+        "3782 822463\xa010005",
+        "6759 6498 2643\n8454 001",
+    ],
+)
+def test_any_whitespace_parts_a_cards_groups(card: str) -> None:
+    assert post(client(), [f"Karta {card}, dziękuję"], ["CARD_NUMBER"]).json()["texts"] == [
+        "Karta <CARD_NUMBER_1>, dziękuję"
+    ]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "5555 5555-5555-4444",
+        "5555-5555\n5555-4444",
+        "3782-822463 10005",
+        "DE89\xa03704\xa00044\xa00532\xa00130\xa000",  # an IBAN in fours, with a PDF's spaces
+    ],
+)
+def test_dashes_stay_all_or_none_and_a_longer_run_stays_whole(value: str) -> None:
+    assert post(client(), [f"Numer {value} koniec"], ["CARD_NUMBER"]).json()["texts"] == [
+        f"Numer {value} koniec"
+    ]
+
+
+def test_a_number_ending_the_line_above_does_not_hide_a_card() -> None:
+    assert post(client(), ["Zamówienie 1234\n4111 1111 1111 1111"], ["CARD_NUMBER"]).json()["texts"] == [
+        "Zamówienie 1234\n<CARD_NUMBER_1>"
+    ]
+
+
+def test_a_card_rule_stays_linear_on_long_whitespace() -> None:
+    for text in (("4111" + " " * 1_000) * 200, "4111" + "\n" * 200_000 + "x"):
+        started = time.monotonic()
+        server.anonymize([text], ["CARD_NUMBER"], server.Keep(), None)
+        assert time.monotonic() - started < 2
+
+
+@pytest.mark.parametrize("after", ["12/26", "123", "05/2027"])
+def test_a_card_followed_by_its_expiry_or_code_is_still_taken(after: str) -> None:
+    r = post(client(), [f"Karta 4111 1111 1111 1111 {after}"], ["CARD_NUMBER"]).json()
+    assert r["texts"] == [f"Karta <CARD_NUMBER_1> {after}"]
+
+
+def test_a_card_is_read_before_the_phone_rule_and_stays_when_not_asked_for() -> None:
+    text = "Karta 4111 1111 1111 1111, tel. 600 100 200"
+    assert post(client(), [text], ["CARD_NUMBER", "PHONE"]).json()["texts"] == [
+        "Karta <CARD_NUMBER_1>, tel. <PHONE_1>"
+    ]
+    calls: list = []
+    r = post(client(fake_ner([], calls)), [text], ["PHONE"]).json()
+    assert r["texts"] == ["Karta 4111 1111 1111 1111, tel. <PHONE_1>"]
+    assert calls == [["Karta <CARD_NUMBER_1>, tel. <PHONE_1>"]]  # the model never reads a number it need not
+
+
+PEOPLE = ["Jan Kowalski", "Jana Kowalskiego", "Janowi Kowalskiemu", "Janem Kowalskim", "JAN KOWALSKI"]
+
+
+def test_one_person_keeps_one_label_through_the_case_forms_each_span_its_own() -> None:
+    texts = [
+        "Jan Kowalski pisze",
+        "Kopia do Jana Kowalskiego i Janowi Kowalskiemu, z Janem Kowalskim. JAN KOWALSKI",
+    ]
+    r = post(client(fake_ner(PEOPLE)), texts, ["PERSON"]).json()
+    assert r["texts"] == ["<PERSON_1> pisze", "Kopia do <PERSON_1> i <PERSON_1>, z <PERSON_1>. <PERSON_1>"]
+    assert [texts[e["text"]][e["start"] : e["end"]] for e in r["entities"]] == PEOPLE
+
+
+@pytest.mark.parametrize(
+    ("people", "text", "masked"),
+    [
+        (["Kowalski", "Jan Kowalski"], "Kowalski to Jan Kowalski", "<PERSON_1> to <PERSON_1>"),
+        (["Kowalskiego", "Jan Kowalski"], "Jan Kowalski i Kowalskiego", "<PERSON_1> i <PERSON_1>"),
+        (["Kowalski", "Jan Kowalski", "Adam Kowalski"], "Kowalski, Jan Kowalski, Adam Kowalski",
+         "<PERSON_1>, <PERSON_2>, <PERSON_3>"),  # two such full names: nobody can say whose
+        (["Jan,", "Jan Kowalski"], "Jan, Jan Kowalski", "<PERSON_1> <PERSON_2>"),  # too often another's
+        (["Janowi", "Jan Kowalski"], "Janowi, Jan Kowalski", "<PERSON_1>, <PERSON_2>"),
+        (["Kowalska", "Jan Kowalski"], "Jan Kowalski, Kowalska", "<PERSON_1>, <PERSON_2>"),  # another person
+        (["Anna Kowalska", "Jan Kowalski"], "Jan Kowalski, Anna Kowalska", "<PERSON_1>, <PERSON_2>"),
+        (["Anna Nowak", "Jan Nowak", "Nowaka"], "Anna Nowak, Jan Nowak, Nowaka",
+         "<PERSON_1>, <PERSON_2>, <PERSON_3>"),
+        (["Kowalski", "Kowalskiego"], "Kowalski, Kowalskiego", "<PERSON_1>, <PERSON_1>"),  # no full name
+        (["Kasia", "Katarzyna Nowak"], "Katarzyna Nowak, Kasia", "<PERSON_1>, <PERSON_2>"),  # no diminutives
+    ],
+)  # fmt: skip
+def test_a_lone_surname_shares_the_label_of_the_one_full_name_ending_in_it(
+    people: list[str], text: str, masked: str
+) -> None:
+    assert post(client(fake_ner(people)), [text], ["PERSON"]).json()["texts"] == [masked]
+
+
+@pytest.mark.parametrize(
+    "forms",
+    [
+        "Jan Jana Janowi Janem Janie",
+        "Anna Anny Annie Annę Anną Anno",
+        "Nowak Nowaka Nowakowi Nowakiem Nowaku",
+        "Marek Marka Markowi Markiem Marku",
+        "Paweł Pawła Pawłowi Pawłem Pawle",
+        "Piotr Piotra Piotrowi Piotrem Piotrze",
+        "Grzegorz Grzegorza Grzegorzowi Grzegorzem Grzegorzu",
+        "Maciej Macieja Maciejowi Maciejem Macieju",
+        "Andrzej Andrzeja Andrzejowi Andrzejem Andrzeju",
+        "Jerzy Jerzego Jerzemu Jerzym",
+        "Małgorzata Małgorzaty Małgorzacie Małgorzatę Małgorzatą",
+        "Agnieszka Agnieszki Agnieszce Agnieszkę Agnieszką",
+        "Kinga Kingi Kindze Kingę Kingą",
+        "Zofia Zofii Zofię Zofią Zofio",
+        "Ryszard Ryszarda Ryszardowi Ryszardzie",
+        "Jacek Jacka Jackowi Jackiem Jacku",
+        "Wróbel Wróbla Wróblowi Wróblem Wróblu",
+        "Duda Dudy Dudzie Dudę Dudą",
+        "Sikora Sikory Sikorze Sikorę Sikorą",
+        "Joachim Joachima Joachimowi Joachimem Joachimie",
+        "Kacper Kacpra Kacprowi Kacprem Kacprze",
+        "Sylwester Sylwestra Sylwestrowi Sylwestrem Sylwestrze",
+        "Walter Waltera Walterowi Walterem Walterze",
+        "Wiktoria Wiktorii Wiktorię Wiktorią Wiktorio",
+        "Maria Marii Marię Marią Mario",
+        "Julia Julii Julię Julią",
+        "Natalia Natalii Natalię Natalią",
+        "Kowalski Kowalskiego Kowalskiemu Kowalskim",
+        "Kowalska Kowalskiej Kowalską",
+        "Nowicki Nowickiego Nowickim",
+        "Zawadzka Zawadzkiej Zawadzką",
+        "Orzeszkowa Orzeszkowej Orzeszkową",
+    ],
+)
+def test_the_case_forms_of_a_name_part_share_a_stem(forms: str) -> None:
+    assert len({persons.stem(form.casefold()) for form in forms.split()}) == 1
+
+
+@pytest.mark.parametrize(
+    ("one", "other"),
+    [
+        ("Wiktor", "Wiktoria"), ("Stefan", "Stefania"), ("Emil", "Emilia"), ("Kornel", "Kornelia"),
+        ("Antoni", "Antonia"), ("Kazimierz", "Kazimiera"), ("Kazimierza", "Kazimierę"),
+        ("Aleksander", "Aleksandra"), ("Kowalski", "Kowalska"),
+    ],
+)  # fmt: skip
+def test_names_that_are_no_case_form_of_each_other_keep_their_stems(one: str, other: str) -> None:
+    assert persons.stem(one.casefold()) != persons.stem(other.casefold())
+
+
+def test_a_long_word_is_stemmed_in_time() -> None:
+    started = time.monotonic()
+    persons.merged(["a" * 200_000, "ą" * 200_000 + "ski"])
+    assert time.monotonic() - started < 1
+
+
+def test_the_english_instance_keeps_its_forms_apart(english: None) -> None:
+    text = "Jan Kowalski, Jana Kowalskiego"
+    ner = fake_ner(["Jan Kowalski", "Jana Kowalskiego"])
+    assert post(client(ner), [text], ["PERSON"]).json()["texts"] == ["<PERSON_1>, <PERSON_2>"]
+
+
 @pytest.fixture
 def english(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(anonymizer, "ENGLISH", True)
-
-
-def all_features() -> list[str]:
-    return [*server.FEATURES, *server.ENGLISH_FEATURES]
 
 
 @pytest.mark.parametrize(("feature", "valid", "invalid"), ENGLISH_TAKES)
@@ -501,7 +761,7 @@ def test_english_golden_vectors(english: None, feature: str, valid: str, invalid
 
 
 def test_the_english_rules_leave_amounts_dates_and_references(english: None) -> None:
-    features = [f for f in all_features() if f != "PERSON"]
+    features = [f for f in server.FEATURES if f != "PERSON"]
     texts = [f"x {text} y" for text in ENGLISH_LEAVES]
     assert post(client(), texts, features).json()["texts"] == texts
 
@@ -511,7 +771,6 @@ def test_the_polish_instance_has_no_english_rules() -> None:
     r = post(client(), texts, list(server.FEATURES)).json()
     changed = [t for t, sent in zip(r["texts"], texts, strict=True) if t != sent]
     assert changed == ["no. <PHONE_1> end"]  # 01 234 5678 reads as a Polish 2-3-2-2 number too
-    assert post(client(), ["a"], ["CARD_NUMBER"]).json()["error"]["code"] == "unsupported_feature"
     assert post(client(), ["a"], ["EMAIL"], keep={"phones": ["020 7946 0958"]}).status_code == 400
 
 
@@ -548,7 +807,7 @@ def test_a_2007_pesel_the_uk_mobile_rule_takes_is_still_a_pesel(english: None) -
 def test_the_english_rules_stay_linear_on_hostile_text(english: None) -> None:
     for text in ("1 " * 100_000, "+1 " * 66_666, "0-" * 100_000, "4111 " * 40_000, "AB12" * 50_000):
         started = time.monotonic()
-        server.anonymize([text], all_features(), server.Keep(), None)
+        server.anonymize([text], server.FEATURES, server.Keep(), None)
         assert time.monotonic() - started < 2
 
 

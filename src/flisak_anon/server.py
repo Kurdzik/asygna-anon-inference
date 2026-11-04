@@ -21,20 +21,30 @@ import time
 import uuid
 from collections import Counter
 from collections.abc import Sequence
+from functools import partial
 from pathlib import Path
 from typing import Any
 
+from anyio import from_thread
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.exceptions import HTTPException
 
-from flisak_anon import anonymizer
+from flisak_anon import anonymizer, persons
 from flisak_anon.anonymizer import EntityRegistry, Ner, Record
 
-FEATURES = ("PERSON", "EMAIL", "PHONE", "PESEL", "BANK_ACCOUNT", "ID_CARD", "IP_ADDRESS")  # api.3
-ENGLISH_FEATURES = ("CARD_NUMBER",)  # offered only with ANON_LANGUAGE=en
+FEATURES = (
+    "PERSON",
+    "EMAIL",
+    "PHONE",
+    "PESEL",
+    "BANK_ACCOUNT",
+    "ID_CARD",
+    "IP_ADDRESS",
+    "CARD_NUMBER",
+)  # api.3
 MODEL_FEATURES = {"PERSON", "PHONE"}  # A4: only these run the model
 MAX_BODY = 2 * 1024 * 1024
 MAX_TEXTS = 64
@@ -52,6 +62,7 @@ ERRORS = {  # code: status, OpenAI type, fixed message (api.2: never the input)
     "unsupported_feature": (422, "invalid_request_error", "A feature is not offered."),
     "busy": (429, "rate_limit_error", "The server is busy, try again shortly."),
     "server_error": (500, "server_error", "The server failed."),
+    "client_left": (499, "invalid_request_error", "The client left."),  # only the log reads it
 }
 log = logging.getLogger("flisak_anon.server")
 
@@ -103,9 +114,8 @@ def parse(body: bytes, model_id: str) -> AnonymizeRequest:
         or max(len(req.keep.emails), len(req.keep.phones)) > MAX_KEEP
     ):
         raise ApiError("too_large")
-    offered = FEATURES + ENGLISH_FEATURES if anonymizer.ENGLISH else FEATURES
     for f in req.features:
-        if f not in offered:  # the code back only when it looks like one, never free text
+        if f not in FEATURES:  # the code back only when it looks like one, never free text
             raise ApiError("unsupported_feature", f if re.fullmatch(r"[A-Z][A-Z0-9_]{0,31}", f) else None)
     if len(set(req.features)) != len(req.features):
         raise ApiError("invalid_request", "features")
@@ -184,9 +194,13 @@ def anonymize(
         spans = [{**p, "source": "regex"} for p in placed if wanted(p)] + model
         found += [(i, s) for s in sorted(spans, key=lambda s: s["start"])]
     registry = EntityRegistry()
+    # Polish case endings mean nothing to an English instance's names, and it was never measured with them
+    names = (s["key"] for _, s in found if s["type"] == "PERSON")
+    people = {} if anonymizer.ENGLISH else persons.merged(names)
     entities = [
         {"text": i, "start": s["start"], "end": s["end"], "type": s["type"],
-         "label": f"<{s['type']}_{registry.assign(s['type'], s['key'])}>", "source": s["source"]}
+         "label": f"<{s['type']}_{registry.assign(s['type'], people.get(s['key'], s['key']))}>",
+         "source": s["source"]}
         for i, s in found
     ]  # fmt: skip
     out = [
@@ -202,8 +216,11 @@ def create_app(model_id: str, ner: Ner, api_key: str) -> FastAPI:
     # ponytail: one model run at a time; a pool of pipelines (or GPU batching across requests) for throughput
     model_lock = threading.Lock()
 
-    def locked_ner(texts: list[str], **kwargs: Any) -> list[list[Record]]:
+    def locked_ner(request: Request, texts: list[str], **kwargs: Any) -> list[list[Record]]:
         with model_lock:
+            # A client that gave up while this waited reads nothing: its run would only hold up the next one.
+            if from_thread.run(request.is_disconnected):
+                raise ApiError("client_left")
             return ner(texts, **kwargs)
 
     def authorized(request: Request) -> bool:
@@ -243,7 +260,7 @@ def create_app(model_id: str, ner: Ner, api_key: str) -> FastAPI:
             if model and not slots.acquire(blocking=False):
                 raise ApiError("busy")
             try:
-                use = locked_ner if model else None
+                use = partial(locked_ner, request) if model else None
                 texts, entities = await run_in_threadpool(anonymize, req.texts, req.features, req.keep, use)
             finally:
                 if model:
