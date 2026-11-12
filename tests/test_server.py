@@ -12,12 +12,12 @@ import pytest
 import uvicorn
 from fastapi.testclient import TestClient
 
-from flisak_anon import anonymizer, persons, server
-from flisak_anon.anonymizer import REQUIRED_MODEL_FILES
+from asygna_anon import anonymizer, persons, server
+from asygna_anon.anonymizer import REQUIRED_MODEL_FILES
 
 KEY = "k" * 32
 AUTH = {"Authorization": f"Bearer {KEY}"}
-MODEL = "flisak-anon-0.1.0"
+MODEL = "asygna-anon-0.1.0"
 
 
 def fake_ner(people: list, calls: list | None = None):
@@ -324,7 +324,7 @@ def manifest_dir(tmp_path: Path) -> Path:
         (tmp_path / f).write_text(f"{f} bytes")
     files = {f.name: hashlib.sha256(f.read_bytes()).hexdigest() for f in tmp_path.iterdir()}
     (tmp_path / "manifest.json").write_text(
-        json.dumps({"name": "flisak-anon", "version": "0.1.0", "files": files})
+        json.dumps({"name": "asygna-anon", "version": "0.1.0", "files": files})
     )
     return tmp_path
 
@@ -376,7 +376,7 @@ def test_a_request_whose_client_left_while_it_waited_never_reaches_the_model(cap
     running = threading.Thread(target=uvicorn_server.run, kwargs={"sockets": [listening]})
     running.start()
     try:
-        with caplog.at_level(logging.INFO, logger="flisak_anon.server"):
+        with caplog.at_level(logging.INFO, logger="asygna_anon.server"):
             while not uvicorn_server.started:
                 time.sleep(0.01)
             first = send("Pierwszy tekst")

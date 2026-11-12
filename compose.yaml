@@ -1,7 +1,7 @@
 # The anonymisation API, one service per model; each model is downloaded once, into the volume. The API speaks plain
 # HTTP, so its ports stay on localhost: put a TLS proxy in front to reach it from another machine.
 x-image: &image
-  image: flisak-anon-inference
+  image: asygna-anon-inference
   build: .
 
 x-model: &model
@@ -40,7 +40,7 @@ services:
       - "127.0.0.1:8001:8000"
     environment:
       ANON_API_KEY: ${ANON_API_KEY:?set ANON_API_KEY in .env}
-      ANON_MODEL_DIR: /models/flisak-anon-en
+      ANON_MODEL_DIR: /models/asygna-anon-en
       ANON_LANGUAGE: en
     depends_on:
       english-model:
@@ -49,7 +49,7 @@ services:
   english-model:
     <<: *model
     environment:
-      MODEL: flisak-anon-en
+      MODEL: asygna-anon-en
 
   polish:
     <<: *service
@@ -57,7 +57,7 @@ services:
       - "127.0.0.1:8000:8000"
     environment:
       ANON_API_KEY: ${ANON_API_KEY:?set ANON_API_KEY in .env}
-      ANON_MODEL_DIR: /models/flisak-anon
+      ANON_MODEL_DIR: /models/asygna-anon
       ANON_LANGUAGE: pl
     depends_on:
       polish-model:
@@ -66,7 +66,7 @@ services:
   polish-model:
     <<: *model
     environment:
-      MODEL: flisak-anon
+      MODEL: asygna-anon
 
 volumes:
   models:

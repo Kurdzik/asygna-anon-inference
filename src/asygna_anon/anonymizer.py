@@ -33,7 +33,7 @@ ENTITY_MAPPING = {
     "nam_liv_god": "PERSON",
     "nam_adj_person": "PERSON",
     "nam_num_phone": "PHONE",
-    "PER": "PERSON",  # flisak-anon-en's one label (O, B-PER, I-PER)
+    "PER": "PERSON",  # asygna-anon-en's one label (O, B-PER, I-PER)
 }
 NER_SCORE_THRESHOLD = 0.4
 NER_KWARGS = {"batch_size": 8}

@@ -8,4 +8,4 @@ RUN useradd --uid 1000 anon && mkdir /models && chown anon /models
 ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1 HOME=/tmp HF_HOME=/tmp/hf
 USER anon
 EXPOSE 8000
-CMD ["python", "-m", "flisak_anon.server"]
+CMD ["python", "-m", "asygna_anon.server"]

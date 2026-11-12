@@ -99,7 +99,7 @@ wheels = [
 ]
 
 [[package]]
-name = "flisak-anon-inference"
+name = "asygna-anon-inference"
 version = "0.1.1"
 source = { editable = "." }
 dependencies = [

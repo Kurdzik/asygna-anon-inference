@@ -1,4 +1,4 @@
-# flisak-anon-inference
+# asygna-anon-inference
 
 The anonymisation API. It replaces personal data in text with numbered placeholders, on your own server, so the text
 can go on to an AI model or a reader who should not see the data.
@@ -17,8 +17,8 @@ The numbering is also in this code, so a model on its own gives you neither the 
 
 | Model | Language | `ANON_LANGUAGE` |
 |---|---|---|
-| [Kurdzik/flisak-anon](https://huggingface.co/Kurdzik/flisak-anon) | Polish | `pl` (default) |
-| [Kurdzik/flisak-anon-en](https://huggingface.co/Kurdzik/flisak-anon-en) | English | `en` |
+| [Kurdzik/asygna-anon](https://huggingface.co/Kurdzik/asygna-anon) | Polish | `pl` (default) |
+| [Kurdzik/asygna-anon-en](https://huggingface.co/Kurdzik/asygna-anon-en) | English | `en` |
 
 Run one process per model. `ANON_LANGUAGE=en` adds English phone, SSN and National Insurance rules to the Polish rules.
 
@@ -48,9 +48,9 @@ Without Docker, with [uv](https://docs.astral.sh/uv/) and Python 3.12:
 
 ```
 uv sync
-uv run hf download Kurdzik/flisak-anon-en --local-dir models/flisak-anon-en --exclude .gitattributes
-rm -rf models/flisak-anon-en/.cache
-ANON_API_KEY=$(openssl rand -hex 24) ANON_MODEL_DIR=models/flisak-anon-en ANON_LANGUAGE=en uv run python -m flisak_anon.server
+uv run hf download Kurdzik/asygna-anon-en --local-dir models/asygna-anon-en --exclude .gitattributes
+rm -rf models/asygna-anon-en/.cache
+ANON_API_KEY=$(openssl rand -hex 24) ANON_MODEL_DIR=models/asygna-anon-en ANON_LANGUAGE=en uv run python -m asygna_anon.server
 ```
 
 Remove `.cache` and leave out `.gitattributes` as above: the server checks the directory against the model's

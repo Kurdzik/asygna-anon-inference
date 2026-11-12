@@ -1,6 +1,6 @@
 """The anonymisation API (API.md api.2-api.4): POST /v1/anonymize, GET /v1/models, GET /health.
 
-`python3 -m flisak_anon.server` serves the checkpoint directory in ANON_MODEL_DIR on port 8000, Bearer key
+`python3 -m asygna_anon.server` serves the checkpoint directory in ANON_MODEL_DIR on port 8000, Bearer key
 ANON_API_KEY, once every file matched manifest.json (A9) and one warm-up ran, on CUDA when there is one; with
 ANON_LANGUAGE=en (pl by default) the regex stage runs its English rules too. It needs only fastapi, uvicorn,
 pydantic, torch and transformers, all in vllm/vllm-openai:v0.29.0, and logs counts, codes and timings, never a
@@ -32,8 +32,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.exceptions import HTTPException
 
-from flisak_anon import anonymizer, persons
-from flisak_anon.anonymizer import EntityRegistry, Ner, Record
+from asygna_anon import anonymizer, persons
+from asygna_anon.anonymizer import EntityRegistry, Ner, Record
 
 FEATURES = (
     "PERSON",
@@ -64,7 +64,7 @@ ERRORS = {  # code: status, OpenAI type, fixed message (api.2: never the input)
     "server_error": (500, "server_error", "The server failed."),
     "client_left": (499, "invalid_request_error", "The client left."),  # only the log reads it
 }
-log = logging.getLogger("flisak_anon.server")
+log = logging.getLogger("asygna_anon.server")
 
 
 class ApiError(Exception):
@@ -325,13 +325,13 @@ def main() -> None:
     os.environ.setdefault("HF_HUB_OFFLINE", "1")  # a local directory only, never the Hub
     api_key, model_dir = os.environ.get("ANON_API_KEY", ""), os.environ.get("ANON_MODEL_DIR", "")
     if len(api_key) < 16 or not model_dir:
-        sys.exit("flisak_anon.server: set ANON_MODEL_DIR and ANON_API_KEY (at least 16 characters)")
+        sys.exit("asygna_anon.server: set ANON_MODEL_DIR and ANON_API_KEY (at least 16 characters)")
     if os.environ.get("ANON_LANGUAGE", "pl") not in ("pl", "en"):
-        sys.exit("flisak_anon.server: ANON_LANGUAGE is pl or en")
+        sys.exit("asygna_anon.server: ANON_LANGUAGE is pl or en")
     try:
         model_id = verify(Path(model_dir))
     except (OSError, ValueError, KeyError) as e:
-        sys.exit(f"flisak_anon.server: refusing to start: {e}")
+        sys.exit(f"asygna_anon.server: refusing to start: {e}")
     log.info("manifest verified model=%s english=%s", model_id, anonymizer.ENGLISH)
     import uvicorn
 

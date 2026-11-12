@@ -1,6 +1,6 @@
 # Anonymisation API
 
-The HTTP contract and the rules of the service in `src/flisak_anon/`. It runs on premises, stateless, one model a
+The HTTP contract and the rules of the service in `src/asygna_anon/`. It runs on premises, stateless, one model a
 process, and it is meant to be called by servers. A caller names what it wants masked in each request.
 
 Contract version 1.2 (code 0.1.1, models unchanged): every instance offers all eight features of api.3, and a Polish
@@ -94,7 +94,7 @@ The message is a fixed sentence per code and never quotes the input.
 
 | Code | Checklist (pl / en) | Found by | What is replaced |
 |---|---|---|---|
-| `PERSON` | Imiona i nazwiska / People's names | model: flisak-anon's `nam_liv_person`, `nam_liv_character`, `nam_liv_god`, `nam_adj_person` above score 0.4 | names in every case form, diminutives, signatures, lowercase and uppercase. Companies, streets, institutions and brands named after people stay. |
+| `PERSON` | Imiona i nazwiska / People's names | model: asygna-anon's `nam_liv_person`, `nam_liv_character`, `nam_liv_god`, `nam_adj_person` above score 0.4 | names in every case form, diminutives, signatures, lowercase and uppercase. Companies, streets, institutions and brands named after people stay. |
 | `EMAIL` | Adresy e-mail / E-mail addresses | regex + validation | the whole address |
 | `PHONE` | Numery telefonów / Phone numbers | regex (Polish formats, `+48`/`0048`; English below) + model (`nam_num_phone`) | the number |
 | `PESEL` | Numery PESEL / PESEL numbers | regex, checksum | 11 digits with a valid check digit; English below |
@@ -172,7 +172,7 @@ Not offered yet. Each needs a model or regex change and is measured before it is
 step 4's trim and overlap rule and step 5 (`anonymize`). `anonymizer.py`: steps 1-3 and step 4's snap and mapping. `persons.py`: step 5's one label per person. `create_app`
 takes the NER function, so `tests/test_server.py` injects a fake one.
 
-**Runtime.** CUDA when the container sees a GPU, else CPU. On CPU flisak-anon reads about 1,000 characters in 168
+**Runtime.** CUDA when the container sees a GPU, else CPU. On CPU asygna-anon reads about 1,000 characters in 168
 ms of wall time on 6 threads , so a 5,000-character complaint takes under a second and the
 200,000-character limit about 34 s. Text of one token per character costs three times that: 200,000 dots or emoji
 are 449 windows and took about 100 s in the image on 6 CPUs (2026-10-14). One model run at a time; up to 8 more
